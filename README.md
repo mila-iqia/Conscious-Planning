@@ -3,7 +3,7 @@
 pip install -r requirements.txt
 ```
 
-## **Examples for Reproducing the Results**
+## **Reproducing Results**
 
 CP:
 ```
