@@ -1,8 +1,7 @@
 import tensorflow as tf
-import gym, numpy as np, random, cv2, sys, os
+import gym, numpy as np, random, sys, os
 from gym.envs.registration import register as gym_register
 
-cv2.ocl.setUseOpenCL(False)
 sys.path.append(os.getcwd())
 gym_register(id="RandDistShift-v0", entry_point="AdvancedRandDistShift:AdvancedRandDistShift", reward_threshold=0.95)
 
