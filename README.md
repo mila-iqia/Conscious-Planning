@@ -1,3 +1,8 @@
+## **Install Dependencies**
+```
+pip install -r requirements.txt
+```
+
 ## **Examples for Reproducing the Results**
 
 CP:
