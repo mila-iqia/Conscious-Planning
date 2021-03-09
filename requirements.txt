@@ -1,0 +1,10 @@
+imageio-ffmpeg
+imageio
+anytree
+opencv-python
+gym-minigrid
+gym
+procgen
+cpprb
+tensorboardx
+psutil
