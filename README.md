@@ -1,6 +1,8 @@
 ### [A Consciousness-Inspired Planning Agent for Model-Based Reinforcement Learning](http://mingde.world/publications/a-step-towards-conscious-planning)
 _By Mingde "Harry" Zhao, Zhen Liu, Sitao Luan, Shuyuan Zhang, Doina Precup and Yoshua Bengio_
 
+#### ([BLOGPOST](http://mingde.world/publications/a-step-towards-conscious-planning))
+
 #### **Install Dependencies**
 ```
 pip install -r requirements.txt
