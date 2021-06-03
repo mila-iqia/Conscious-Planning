@@ -1,9 +1,12 @@
-## **Install Dependencies**
+### A Consciousness-Inspired Planning Agent for Model-Based Reinforcement Learning
+_By Mingde "Harry" Zhao, Zhen Liu, Sitao Luan, Shuyuan Zhang, Doina Precup and Yoshua Bengio_
+
+#### **Install Dependencies**
 ```
 pip install -r requirements.txt
 ```
 
-## **Reproducing Results**
+#### **Reproducing Results (for main manuscript)**
 
 CP
 ```
@@ -34,3 +37,6 @@ NOSET
 ```
 python run_distshift_randomized_mp.py --method DQN_WM --num_explorers 8 --ignore_model 0 --layers_model 2 --len_hidden 256
 ```
+
+#### **Reproducing Results (for additional dynamics)**
+Changes are to be synced from our private repository.
