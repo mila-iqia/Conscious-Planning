@@ -27,17 +27,17 @@ python run_distshift_randomized_mp.py --method DQN_WM --num_explorers 8 --ignore
 
 Dyna
 ```
-python run_distshift_randomized_mp.py --method DQN_WM --num_explorers 8 --ignore_model 0 --layers_model 1 --disable_bottleneck 0 --size_bottleneck 8 --learn_dyna_model 1
+python run_distshift_randomized_mp.py --method DQN_Dyna --num_explorers 8 --ignore_model 0 --layers_model 1 --disable_bottleneck 0 --size_bottleneck 8 --learn_dyna_model 1
 ```
 
 Dyna*
 ```
-python run_distshift_randomized_mp.py --method DQN_WM --num_explorers 8 --ignore_model 0 --layers_model 1 --disable_bottleneck 0 --size_bottleneck 8 --learn_dyna_model 0
+python run_distshift_randomized_mp.py --method DQN_Dyna --num_explorers 8 --ignore_model 0 --layers_model 1 --disable_bottleneck 0 --size_bottleneck 8 --learn_dyna_model 0
 ```
 
 NOSET
 ```
-python run_distshift_randomized_mp.py --method DQN_WM --num_explorers 8 --ignore_model 0 --layers_model 2 --len_hidden 256
+python run_distshift_randomized_mp.py --method DQN_NOSET --num_explorers 8 --ignore_model 0 --layers_model 2 --len_hidden 256
 ```
 
 #### **Reproducing Results (for additional dynamics)**
