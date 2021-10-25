@@ -1,25 +1,23 @@
 """
-THIS IS THE ALTERNATIVE SCRIPT FOR EXPERIMENTS
+THIS IS A SCRIPT FOR TESTING AGENTS ON TRADITIONAL STATIC RL SETTINGS
 THIS RUNS EXPERIMENT WITH SINGLE PROCESS
-EASIER FOR DEBUGGING
-DYNA AND DYNA* HAS ONLY MULTI PROCESSING VERSION
+ONLY ONE ENVIRONMENT IS GENERATED FOR EACH CASE AND FIXED DURING THE WHOLE PROCESS
 """
 
 import tensorflow as tf
 from gym_minigrid.wrappers import *
-import time, argparse, gym, datetime, os, psutil
+import time, argparse, gym, datetime, numpy as np, os, psutil
+
 # from DQN import get_DQN_agent
 from DQN_NOSET import get_DQN_NOSET_agent
 from DQN_CP import get_DQN_CP_agent
-from DQN_WM import get_DQN_WM_agent
 from utils import *
-from runtime import FrameStack, generate_comments, evaluate_agent_env_random
-
+from runtime import FrameStack, generate_comments
 process = psutil.Process(os.getpid())
 
 parser = argparse.ArgumentParser(description='')
 # arguments for experiment setting
-parser.add_argument('--method', type=str, default='DQN_CP', help='type of agent')
+parser.add_argument('--method', type=str, default='DQN_NOSET', help='type of agent')
 parser.add_argument('--game', type=str, default='RandDistShift', help='RandDistShift or KeyRandDistShift')
 parser.add_argument('--version_game', type=str, default='v1', help='v1 (for turn-OR-forward) or v3 (for turn-AND-forward)')
 parser.add_argument('--size_world', type=int, default=8, help='the length of each dimension for gridworlds')
@@ -34,7 +32,7 @@ parser.add_argument('--QKV_depth', type=int, default=1, help='depth of QKV layer
 parser.add_argument('--QKV_width', type=int, default=64, help='width of QKV layers in SA layers, does not matter if QKV_depth == 1')
 parser.add_argument('--FC_depth', type=int, default=2, help='depth of MLP in transformer layers')
 parser.add_argument('--FC_width', type=int, default=64, help='width of MLP in transformer layers')
-parser.add_argument('--layers_model', type=int, default=1, help='#action-augmented transformer layers for dynamics model')
+parser.add_argument('--layers_model', type=int, default=2, help='#action-augmented transformer layers for dynamics model')
 parser.add_argument('--len_feature', type=int, default=24, help='length of the feature part of the object embeddings')
 parser.add_argument('--len_hidden', type=int, default=256, help='only for NOSET, length of the vectorized representation')
 parser.add_argument('--step_plan_max', type=int, default=5, help='#planning steps')
@@ -79,16 +77,16 @@ parser.add_argument('--comments', type=str, default='x', help='use x for default
 parser.add_argument('--visualization', type=int, default=0, help='render bottleneck attention')
 parser.add_argument('--env_pipeline', type=int, default=1, help='environment generation pipeline, use if many cores')
 parser.add_argument('--performance_only', type=int, default=0, help='disable recording debug info, to accelerate experiments')
-
 args = parser.parse_args()
 
-def get_new_env(args, width=8, height=8, lava_density_range=[0.3, 0.4], min_num_route=1, transposed=False):
-    env = gym.make('RandDistShift-%s' % args.version_game, width=width, height=height, lava_density_range=lava_density_range, min_num_route=min_num_route, transposed=transposed, random_color=args.color_distraction)
+def get_new_env(args, lava_density_range=[0.3, 0.4], min_num_route=1, transposed=False):
+    env = gym.make('RandDistShift-%s' % args.version_game, width=args.size_world, height=args.size_world, lava_density_range=lava_density_range, min_num_route=min_num_route, transposed=transposed, random_color=args.color_distraction)
     if args.framestack: env = FrameStack(env, args.framestack)
     return env
 
-config_train = {'width': 8, 'height': 8, 'lava_density_range': [0.3, 0.4], 'min_num_route': 1, 'transposed': False}
+config_train = {'lava_density_range': [0.3, 0.4], 'min_num_route': 1, 'transposed': False}
 env = get_new_env(args, **config_train)
+
 if args.clip_reward: args.transform_reward, args.reward_min, args.reward_max = False, -1.0, 1.0
 args.reward_min, args.reward_max = float(min(env.reward_range)), float(max(env.reward_range))
 if args.reward_min >= 0: args.value_min = args.reward_min
@@ -101,8 +99,6 @@ if args.method == 'DQN':
     raise NotImplementedError('DQN code depracated')
 elif args.method == 'DQN_NOSET':
     agent = get_DQN_NOSET_agent(env, args)
-elif args.method == 'DQN_WM':
-    agent = get_DQN_WM_agent(env, args)
 elif args.method == 'DQN_UP' or args.method == 'DQN_CP':
     agent = get_DQN_CP_agent(env, args)
 
@@ -115,16 +111,17 @@ time_start = time.time()
 return_cum, step_episode, time_episode_start, str_info = 0, 0, time.time(), ''
 
 while agent.steps_interact <= args.steps_max and episode_elapsed <= args.episodes_max and agent.steps_interact <= args.steps_stop:
-    env = get_new_env(args, **config_train)
     obs_curr, done = env.reset(), False
     if agent.replay_buffer.get_stored_size() > 0: agent.replay_buffer.on_episode_end()
     while not done and agent.steps_interact <= args.steps_max:
         if args.method == 'random':
             obs_next, reward, done, _ = env.step(env.action_space.sample()) # take a random action
+            reward = np.sign(reward)
             step_episode += 1
         else:
             action = agent.decide(obs_curr, env=env)
             obs_next, reward, done, _ = env.step(action) # take a computed action
+            reward = np.sign(reward)
             step_episode += 1
             if step_episode == env.unwrapped.max_steps:
                 agent.step(obs_curr, action, reward, obs_next, False)
@@ -136,14 +133,16 @@ while agent.steps_interact <= args.steps_max and episode_elapsed <= args.episode
         time_episode_end = time.time()
         tf.summary.scalar('Performance/train', return_cum, agent.steps_interact)
         tf.summary.scalar('Other/episodes', episode_elapsed, agent.steps_interact)
-        if agent.initialized and agent.steps_interact >= args.period_warmup:
-            if pointer_milestone < len(milestones_evaluation) and agent.steps_interact - args.period_warmup >= milestones_evaluation[pointer_milestone]:
-                evaluate_agent_env_random(get_new_env, agent, seed, num_episodes=20, milestone=True)
+        if episode_elapsed and agent.steps_interact >= agent.time_learning_starts:
+            if pointer_milestone < len(milestones_evaluation) and agent.steps_interact >= milestones_evaluation[pointer_milestone]:
+                evaluate_agent(env, agent, seed, name_method=args.method + args.comments, num_episodes=5, milestone=True)
                 pointer_milestone += 1
-            elif episode_elapsed % args.freq_eval == 0:
-                evaluate_agent_env_random(get_new_env, agent, seed, num_episodes=1, milestone=False)
                 if not args.ignore_model and args.step_plan_max:
-                    evaluate_agent_env_random(get_new_env, agent, seed, num_episodes=1, milestone=False, suffix='_modelfree', disable_planning=True)
+                    evaluate_agent(env, agent, seed, name_method=args.method + args.comments, num_episodes=5, milestone=True, suffix='_noplan', disable_planning=True)
+            elif episode_elapsed % args.freq_eval == 0:
+                evaluate_agent(env, agent, seed, name_method=args.method + args.comments, num_episodes=5, milestone=False)
+                if not args.ignore_model and args.step_plan_max:
+                    evaluate_agent(env, agent, seed, name_method=args.method + args.comments, num_episodes=5, milestone=False, suffix='_noplan', disable_planning=True)
         if args.method == 'random':
             str_info += 'seed: %g, episode: %d, return: %g, steps: %d, sps_episode: %.2f, sps_overall: %.2f' % (seed, episode_elapsed, return_cum, step_episode, step_episode / (time_episode_end - time_episode_start), agent.steps_interact / (time_episode_end - time_start))
         else:

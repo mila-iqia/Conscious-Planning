@@ -1,3 +1,7 @@
+"""
+GENERIC COMPONENTS
+"""
+
 import tensorflow as tf
 
 config_Conv2D = {'kernel_initializer': 'glorot_normal'}
@@ -27,7 +31,7 @@ class RL_AGENT(tf.Module):
             self.writer.add_image(identifier, image, step)
         else:
             try:
-                tf.summary.scalar(identifier, image, step)
+                tf.summary.image(identifier, image, step)
             except:
                 pass
 
@@ -209,7 +213,7 @@ class EXTRACTOR_FEATURE_MINIGRID_MLP(tf.keras.layers.Layer):
 #         return x
 
 class EXTRACTOR_FEATURE(tf.keras.layers.Layer):
-    def __init__(self, shape_input, channels_out=64, type_extractor='minigrid', features_learnable=True):
+    def __init__(self, shape_input, channels_out=64, type_extractor='atari', features_learnable=True):
         super(EXTRACTOR_FEATURE, self).__init__()
         self.type_extractor = type_extractor
         self.channels_out = channels_out
@@ -220,11 +224,42 @@ class EXTRACTOR_FEATURE(tf.keras.layers.Layer):
             if 'bow' in type_extractor:
                 self.divisor_feature, self.dtype_converted_obs, self.features_learnable = None, tf.int32, True and features_learnable
                 self.extractor = EXTRACTOR_FEATURE_MINIGRID_BOW(shape_input=[self.h, self.w, self.channels_in], len_output=self.channels_out, learnable=self.features_learnable)
+            elif 'linear' in type_extractor:
+                self.divisor_feature, self.dtype_converted_obs, self.features_learnable = None, tf.float32, True and features_learnable
+                self.extractor = EXTRACTOR_FEATURE_MINIGRID_MLP(shape_input=[self.h, self.w, self.channels_in], len_output=self.channels_out, depth=1, learnable=self.features_learnable)
+            elif 'mlp' in type_extractor:
+                self.divisor_feature, self.dtype_converted_obs, self.features_learnable = None, tf.float32, True and features_learnable
+                self.extractor = EXTRACTOR_FEATURE_MINIGRID_MLP(shape_input=[self.h, self.w, self.channels_in], len_output=self.channels_out, depth=2, learnable=self.features_learnable)
             else:
                 self.divisor_feature, self.dtype_converted_obs, self.features_learnable = None, tf.float32, False and features_learnable
                 self.extractor = EXTRACTOR_FEATURE_MINIGRID(shape_input=[self.h, self.w, self.channels_in], len_output=self.channels_out)
-        else:
-            raise NotImplementedError
+        elif 'procgen' in type_extractor:
+            self.type_env = 'procgen'
+            self.divisor_feature, self.dtype_converted_obs, self.features_learnable = 255, tf.float32, True and features_learnable
+            self.convw, self.convh = 7, 7
+            self.extractor = EXTRACTOR_FEATURE_PROCGEN(shape_input=[self.h, self.w, self.channels_in], len_output=self.channels_out, num_blocks=3, scale=4)
+            # procgen paper suggests no framestack and 512 batch size, see pp.14 of https://arxiv.org/pdf/1912.01588.pdf
+        elif 'atari' in type_extractor:
+            self.type_env = 'atari'
+            self.divisor_feature, self.dtype_converted_obs, self.features_learnable = 255, tf.float32, True and features_learnable
+            if 'muzero' in type_extractor:
+                self.extractor = EXTRACTOR_FEATURE_MUZERO(shape_input=[self.h, self.w, self.channels_in], len_output=self.channels_out)
+                self.convh, self.convw = self.extractor.convh, self.extractor.convw
+            elif 'full' in type_extractor:
+                self.convh, self.convw = 9, 6
+                self.extractor = tf.keras.models.Sequential([
+                    tf.keras.layers.Conv2D(32, input_shape=(self.h, self.w, self.channels_in), kernel_size=(8, 8), strides=4, activation='relu'), #
+                    tf.keras.layers.Conv2D(64, kernel_size=(4, 4), strides=2, activation='relu'),
+                    tf.keras.layers.Conv2D(128, kernel_size=(4, 4), strides=2, activation='relu'),
+                    tf.keras.layers.Conv2D(self.channels_out, kernel_size=(3, 3), strides=1)
+                ])
+            else:
+                self.convw, self.convh = 7, 7
+                self.extractor = tf.keras.models.Sequential([
+                    tf.keras.layers.Conv2D(32, input_shape=(self.h, self.w, self.channels_in), kernel_size=(8, 8), strides=4, activation='relu'), #
+                    tf.keras.layers.Conv2D(64, kernel_size=(4, 4), strides=2, activation='relu'),
+                    tf.keras.layers.Conv2D(self.channels_out, kernel_size=(3, 3), strides=1)
+                ])
         self.m = self.convh * self.convw
 
     @tf.function

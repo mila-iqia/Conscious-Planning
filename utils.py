@@ -1,3 +1,7 @@
+"""
+UTILITIES AND TOOLS
+"""
+
 from runtime import *
 import tensorflow as tf
 import numpy as np
@@ -32,7 +36,11 @@ import numpy as np
 #     return continuous_topk(gumbel_keys(w), k, t)
 
 @tf.function
-def to_categorical(value, value_min=-1, value_max=1, atoms=128, clip=True):
+def to_categorical(value, value_min=-1, value_max=1, atoms=128, transform=False, clip=True):
+    if transform:
+        value = h_transform(value, 1)
+        bounds = h_transform(tf.constant([value_min, value_max], dtype=tf.float32), 1)
+        value_min, value_max = bounds[0], bounds[1]
     if clip: value = tf.clip_by_value(value, clip_value_min=value_min, clip_value_max=value_max)
     value = (value - value_min) * (atoms - 1) / (value_max - value_min)
     upper = tf.cast(tf.math.ceil(value), dtype=tf.int32)
@@ -47,11 +55,22 @@ def to_categorical(value, value_min=-1, value_max=1, atoms=128, clip=True):
     return dist
 
 @tf.function
-def from_categorical(dist, value_min=-1, value_max=1, atoms=128):
+def from_categorical(dist, value_min=-1, value_max=1, atoms=128, transform=False):
     support = tf.expand_dims(tf.cast(tf.range(start=0, limit=atoms, delta=1), dtype=tf.float32), axis=-1)
     value = tf.squeeze(dist @ support, [-1])
+    if transform:
+        bounds = h_transform(tf.constant([value_min, value_max], dtype=tf.float32), 1)
+        value_min, value_max = bounds[0], bounds[1]
     value = value_min + value * (value_max - value_min) / (atoms - 1)
+    if transform: value = h_transform(value, -1)
     return value
+
+@tf.function
+def h_transform(x, order, eps=1e-2): # https://arxiv.org/abs/1805.11593
+    if order == 1:
+        return tf.math.sign(x) * (tf.math.sqrt(tf.math.abs(x) + 1) - 1) + eps * x
+    elif order == -1:
+        return tf.math.sign(x) * (tf.math.pow((tf.math.sqrt(1.0 + 4.0 * eps * (tf.math.abs(x) + 1.0 + eps)) - 1.0) / (2.0 * eps), 2) - 1.0)
 
 def embed_pos_hd(dims, len_embed_pos=8):
     dims = list(dims)
@@ -110,53 +129,10 @@ def shape_list(x):
     return ret
 
 @tf.function
-def add_timing_signal_nd(x, min_timescale=1.0, max_timescale=1.0e4):
-    """ Adds a bunch of sinusoids of different frequencies to a Tensor.
-    Each channel of the input Tensor is incremented by a sinusoid of a different frequency and phase in one of the positional dimensions.
-    This allows attention to learn to use absolute and relative positions.
-    Timing signals should be added to some precursors of both the query and the memory inputs to attention.
-    The use of relative position is possible because sin(a+b) and cos(a+b) can be experessed in terms of b, sin(a) and cos(a).
-    x is a Tensor with n "positional" dimensions, e.g. one dimension for a sequence or two dimensions for an image
-    We use a geometric sequence of timescales starting with min_timescale and ending with max_timescale.  The number of different
-    timescales is equal to channels // (n * 2). For each timescale, we generate the two sinusoidal signals sin(timestep/timescale) and cos(timestep/timescale).  All of these sinusoids are concatenated in the channels dimension.
-    Args:       x: a Tensor with shape [batch, d1 ... dn, channels]
-                min_timescale: a float; max_timescale: a float
-    Returns:    a Tensor the same shape as x. """
-    num_dims = len(x.get_shape().as_list()) - 2
-    channels = shape_list(x)[-1]
-    num_timescales = channels // (num_dims * 2)
-    log_timescale_increment = (tf.math.log(float(max_timescale) / float(min_timescale)) / (tf.cast(num_timescales, dtype=tf.float32) - 1))
-    inv_timescales = min_timescale * tf.exp(tf.range(num_timescales, dtype=tf.float32) * -log_timescale_increment)
-    for dim in range(num_dims):
-        length = shape_list(x)[dim + 1]
-        position = tf.range(length, dtype=tf.float32)
-        scaled_time = tf.expand_dims(position, 1) * tf.expand_dims(inv_timescales, 0)
-        signal = tf.concat([tf.sin(scaled_time), tf.cos(scaled_time)], axis=1)
-        prepad = dim * 2 * num_timescales
-        postpad = channels - (dim + 1) * 2 * num_timescales
-        signal = tf.pad(signal, [[0, 0], [prepad, postpad]])
-        for _ in range(1 + dim):
-            signal = tf.expand_dims(signal, 0)
-        for _ in range(num_dims - 1 - dim):
-            signal = tf.expand_dims(signal, -2)
-        x += signal
-    return x
-
-@tf.function
 def huber_from_L1(abs_error, delta=1.0):
 	quadratic = tf.math.minimum(abs_error, delta)
 	linear = abs_error - quadratic
 	return tf.reduce_mean(0.5 * tf.math.multiply(quadratic, quadratic) + delta * linear, axis=-1)
-
-@tf.function
-def noisy_shift2(embed_pos):
-    size_batch = embed_pos.shape[0]
-    embed_posx, embed_posy = tf.split(embed_pos[0, :, :], 2, axis=-1)
-    x_max, y_max = tf.cast(tf.reduce_max(embed_posx), dtype=tf.int32), tf.cast(tf.reduce_max(embed_posy), dtype=tf.int32)
-    noise_x = tf.random.uniform([size_batch, 1, embed_posx.shape[-1]], minval=-x_max, maxval=x_max, dtype=tf.int32) # num_objects axis to be broadcasted
-    noise_y = tf.random.uniform([size_batch, 1, embed_posy.shape[-1]], minval=-y_max, maxval=y_max, dtype=tf.int32) # num_objects axis to be broadcasted
-    noise = tf.cast(tf.concat([noise_x, noise_y], axis=-1), dtype=tf.float32)
-    return embed_pos + noise
 
 @tf.function
 def clip_gradients(gradients):
@@ -222,6 +198,15 @@ def scaled_dot_product_attention(q, k, v, top_k=np.inf):
     size_batch, num_heads, num_queries, num_keys = attention_weights.shape
     if top_k < num_keys:
         attention_weights_top_k, indices_top_k = tf.math.top_k(attention_weights, k=top_k, sorted=True)
+        # indices_QxK = tf.concat([tf.reshape(tf.range(num_queries), [-1, 1, 1]) + tf.zeros([num_queries, num_keys, 1], dtype=tf.int32), tf.repeat(tf.reshape(tf.range(num_keys), [1, -1, 1]), num_queries, axis=0)], axis=-1)
+        # indices_HxQxK = tf.concat([tf.reshape(tf.range(num_heads), [-1, 1, 1, 1]) + tf.zeros([num_heads, num_queries, num_keys, 1], dtype=tf.int32), tf.repeat(tf.expand_dims(indices_QxK, 0), num_heads, axis=0)], axis=-1)
+        # indices_BxHxQxK = tf.concat([tf.reshape(tf.range(size_batch), [-1, 1, 1, 1, 1]) + tf.zeros([size_batch, num_heads, num_queries, num_keys, 1], dtype=tf.int32), tf.repeat(tf.expand_dims(indices_HxQxK, 0), size_batch, axis=0)], axis=-1)
+        
+        # indices_QxK = tf.concat([tf.reshape(tf.range(num_queries), [-1, 1, 1]) + tf.zeros([num_queries, top_k, 1], dtype=tf.int32), tf.repeat(tf.reshape(tf.range(top_k), [1, -1, 1]), num_queries, axis=0)], axis=-1)
+        # indices_HxQxK = tf.concat([tf.reshape(tf.range(num_heads), [-1, 1, 1, 1]) + tf.zeros([num_heads, num_queries, top_k, 1], dtype=tf.int32), tf.repeat(tf.expand_dims(indices_QxK, 0), num_heads, axis=0)], axis=-1)
+        # indices_BxHxQxK = tf.concat([tf.reshape(tf.range(size_batch), [-1, 1, 1, 1, 1]) + tf.zeros([size_batch, num_heads, num_queries, top_k, 1], dtype=tf.int32), tf.repeat(tf.expand_dims(indices_HxQxK, 0), size_batch, axis=0)], axis=-1)
+        # indices_stacked = tf.concat([indices_BxHxQxK[:, :, :, :, :-1], tf.expand_dims(indices_top_k, -1)], axis=-1)
+        # indices_top_k = tf.cast(indices_top_k, tf.int32)
         indices_stacked = tf.concat([tf.repeat(tf.expand_dims(tf.concat([tf.repeat(tf.expand_dims(tf.stack([tf.repeat(tf.expand_dims(tf.range(size_batch, dtype=tf.int32), axis=-1), num_heads, axis=1), tf.repeat(tf.reshape(tf.range(num_heads, dtype=tf.int32), [1, num_heads]), size_batch, axis=0)], -1), 2), num_queries, axis=2), tf.reshape(tf.range(num_queries, dtype=tf.int32), [1, 1, num_queries, 1]) + tf.zeros([size_batch, num_heads, num_queries, 1], dtype=tf.int32)], axis=-1), axis=-2), top_k, axis=-2), tf.expand_dims(indices_top_k, -1)], axis=-1)
         attention_weights = tf.scatter_nd(tf.stop_gradient(indices_stacked), attention_weights_top_k, [size_batch, num_heads, num_queries, num_keys])
         attention_weights, _ = tf.linalg.normalize(attention_weights, ord=1, axis=-1)

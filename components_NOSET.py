@@ -1,3 +1,7 @@
+"""
+COMPONENTS DEFINITIONS FOR NOSET baseline
+"""
+
 import tensorflow as tf
 
 class OBJECT_EXTRACTOR_NOSET(tf.keras.layers.Layer):
@@ -25,10 +29,10 @@ class OBJECT_EXTRACTOR_NOSET(tf.keras.layers.Layer):
 
 class ESTIMATOR_VALUE_NOSET(tf.keras.layers.Layer):
     """ noset counterpart for ESTIMATOR_VALUE """
-    def __init__(self, num_actions, width=64, value_min=-1, value_max=1, atoms=64):
+    def __init__(self, num_actions, width=64, value_min=-1, value_max=1, atoms=64, transform=False):
         super(ESTIMATOR_VALUE_NOSET, self).__init__(name='head_value')
         self.num_actions = num_actions
-        self.value_min, self.value_max, self.atoms = float(value_min), float(value_max), int(atoms)
+        self.value_min, self.value_max, self.atoms, self.transform = float(value_min), float(value_max), int(atoms), bool(transform)
         self.head_Q = tf.keras.models.Sequential([
             tf.keras.layers.Dense(width, activation='relu'),
             tf.keras.layers.Dense(width, activation='relu'),
@@ -44,9 +48,9 @@ class ESTIMATOR_VALUE_NOSET(tf.keras.layers.Layer):
             return logits
 
 class ESTIMATOR_REWARD_TERM_NOSET(tf.keras.layers.Layer):
-    def __init__(self, width_pool=128, value_min=-1, value_max=1, atoms=128, ):
+    def __init__(self, width_pool=128, value_min=-1, value_max=1, atoms=128, transform=False):
         super(ESTIMATOR_REWARD_TERM_NOSET, self).__init__(name='estimator_reward_term')
-        self.value_min, self.value_max, self.atoms = float(value_min), float(value_max), int(atoms)
+        self.value_min, self.value_max, self.atoms, self.transform = float(value_min), float(value_max), int(atoms), bool(transform) # transform not used in the member methods but will be referred by others!
         self.pooler_reward = tf.keras.models.Sequential([
             tf.keras.layers.Dense(width_pool, activation='relu'),
             tf.keras.layers.Dense(width_pool, activation='relu'),
@@ -70,7 +74,7 @@ class ESTIMATOR_REWARD_TERM_NOSET(tf.keras.layers.Layer):
             return reward, term
 
 class MODEL_TRANSITION_NOSET(tf.keras.Model):
-    def __init__(self, n_action_space, len_action, layers_model=3, norm=False, reward_min=-1, reward_max=1, atoms_reward=64, signal_predict_action=True, len_hidden=512):
+    def __init__(self, n_action_space, len_action, layers_model=3, norm=False, reward_min=-1, reward_max=1, atoms_reward=64, transform_reward=False, signal_predict_action=True, len_hidden=512):
         super(MODEL_TRANSITION_NOSET, self).__init__(name='model_transition')
         self.n_action_space, self.len_action = n_action_space, len_action
         self.norm = norm
@@ -84,7 +88,7 @@ class MODEL_TRANSITION_NOSET(tf.keras.Model):
         self.embed_actions = tf.keras.layers.Embedding(self.n_action_space, self.len_action, embeddings_initializer='identity', trainable=False)
         self.signal_predict_action = bool(signal_predict_action)
         if self.signal_predict_action: self.pooler_action_predictor = tf.keras.layers.Dense(n_action_space) # linear and I like it
-        self.predictor_reward_term = ESTIMATOR_REWARD_TERM_NOSET(value_min=reward_min, value_max=reward_max, atoms=atoms_reward)
+        self.predictor_reward_term = ESTIMATOR_REWARD_TERM_NOSET(value_min=reward_min, value_max=reward_max, atoms=atoms_reward, transform=transform_reward)
 
     @tf.function
     def __call__(self, feature_curr, action, predict_reward=True, predict_term=True, eval=False):

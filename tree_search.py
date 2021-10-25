@@ -15,19 +15,19 @@ class NODE(NodeMixin):
 
 @tf.function
 def _get_q_max_from_U(U_imag_nodes_branchable, Q):
-    qs_vec_piece = from_categorical(Q(U_imag_nodes_branchable, eval=True), value_min=Q.value_min, value_max=Q.value_max, atoms=Q.atoms)
+    qs_vec_piece = from_categorical(Q(U_imag_nodes_branchable, eval=True), value_min=Q.value_min, value_max=Q.value_max, atoms=Q.atoms, transform=Q.transform)
     return tf.math.reduce_max(qs_vec_piece)
 
 @tf.function
 def _get_q_from_U(U_imag_nodes_branchable, Q):
-    qs_vec_piece = from_categorical(Q(U_imag_nodes_branchable, eval=True), value_min=Q.value_min, value_max=Q.value_max, atoms=Q.atoms)
+    qs_vec_piece = from_categorical(Q(U_imag_nodes_branchable, eval=True), value_min=Q.value_min, value_max=Q.value_max, atoms=Q.atoms, transform=Q.transform)
     return tf.squeeze(qs_vec_piece)
 
 @tf.function
 def _get_predictions(U_imag_nodes_origin, action_chosen, M):
     Us_imag, Rs_next_imag, term_next_imag, weights_attention = M(U_imag_nodes_origin, action_chosen, eval=True) # tf.expand_dims(action_chosen, 0)
     term_next_imag = tf.math.argmax(term_next_imag, axis=-1, output_type=tf.int32)
-    Rs_next_imag = from_categorical(Rs_next_imag, value_min=M.predictor_reward_term.value_min, value_max=M.predictor_reward_term.value_max, atoms=M.predictor_reward_term.atoms)
+    Rs_next_imag = from_categorical(Rs_next_imag, value_min=M.predictor_reward_term.value_min, value_max=M.predictor_reward_term.value_max, atoms=M.predictor_reward_term.atoms, transform=M.predictor_reward_term.transform)
     return Us_imag, Rs_next_imag, term_next_imag, weights_attention
 
 @tf.function
@@ -102,6 +102,10 @@ def best_first_search(obs_root, set_actions, M, Q, gamma=0.99, max_rollouts=100,
                 if acc_picks_overall > 0:
                     list_acc_picks_overall.append(acc_picks_overall)
                     list_acc_picks_average.append(acc_picks_average)
+                if func_record_image is not None and R_next_true > 0 and node_unbranched.term_true:
+                    env_clone = copy.deepcopy(node_origin.env_clone)
+                    mask_highlight, flag_highlight = _get_highlight(node_origin.U_imag, tf.constant([action_chosen]), tf.constant(mask_change), M)
+                    func_record_image('%s/vis_attention_%d' % (prefix, action_chosen), env_clone.attention_render(highlight_mask=mask_highlight.numpy()), t)
             node_unbranched.mask = tf.logical_or(node_origin.mask, mask_change)
         if node_unbranched.depth > height: height = node_unbranched.depth
         rollouts += 1
@@ -144,12 +148,13 @@ def best_first_search(obs_root, set_actions, M, Q, gamma=0.99, max_rollouts=100,
             if M.conscious and len(list_acc_picks_overall):
                 func_record_scalar('%s/acc_picks_overall' % (prefix), np.mean(list_acc_picks_overall), t)
                 func_record_scalar('%s/acc_picks_average' % (prefix), np.mean(list_acc_picks_average), t)
-                env_clone = copy.deepcopy(node_root.env_clone)
-                obs_next = np.expand_dims(env_clone.step(action_best)[0], 0)
-                mask_change = mask_change_minigrid(node_root.obs, obs_next)
-                mask_highlight, flag_highlight = _get_highlight(node_root.U_imag, tf.constant([action_best]), tf.constant(mask_change), M)
-                if flag_highlight.numpy():
-                    func_record_image('%s/vis_attention_%d' % (prefix, action_best), env_root.attention_render(highlight_mask=mask_highlight.numpy()), t)
+                if func_record_image is not None:
+                    env_clone = copy.deepcopy(node_root.env_clone)
+                    obs_next = np.expand_dims(env_clone.step(action_best)[0], 0)
+                    mask_change = mask_change_minigrid(node_root.obs, obs_next)
+                    mask_highlight, flag_highlight = _get_highlight(node_root.U_imag, tf.constant([action_best]), tf.constant(mask_change), M)
+                    if flag_highlight.numpy():
+                        func_record_image('%s/vis_attention_%d' % (prefix, action_best), env_root.attention_render(highlight_mask=mask_highlight.numpy()), t)
     return action_best
 
 def random_search(obs_root, set_actions, M, Q, gamma=0.99, max_rollouts=100, env_root=None, flag_record=False, E=None, t=None, bow=False, flag_eval=False, suffix_record='', func_record_scalar=tf.summary.scalar, func_record_image=tf.summary.image):
@@ -198,6 +203,10 @@ def random_search(obs_root, set_actions, M, Q, gamma=0.99, max_rollouts=100, env
                 if acc_picks_overall > 0:
                     list_acc_picks_overall.append(acc_picks_overall)
                     list_acc_picks_average.append(acc_picks_average)
+                if func_record_image is not None and R_next_true > 0 and node_unbranched.term_true:
+                    env_clone = copy.deepcopy(node_origin.env_clone)
+                    mask_highlight, flag_highlight = _get_highlight(node_origin.U_imag, tf.constant([action_chosen]), tf.constant(mask_change), M)
+                    func_record_image('%s/vis_attention_%d' % (prefix, action_chosen), env_clone.attention_render(highlight_mask=mask_highlight.numpy()), t)
             node_unbranched.mask = tf.logical_or(node_origin.mask, mask_change)
         if node_unbranched.depth > height: height = node_unbranched.depth
         rollouts += 1
@@ -241,10 +250,11 @@ def random_search(obs_root, set_actions, M, Q, gamma=0.99, max_rollouts=100, env
             if M.conscious and len(list_acc_picks_overall):
                 func_record_scalar('%s/acc_picks_overall' % (prefix), np.mean(list_acc_picks_overall), t)
                 func_record_scalar('%s/acc_picks_average' % (prefix), np.mean(list_acc_picks_average), t)
-                env_clone = copy.deepcopy(node_root.env_clone)
-                obs_next = np.expand_dims(env_clone.step(action_best)[0], 0)
-                mask_change = mask_change_minigrid(node_root.obs, obs_next)
-                mask_highlight, flag_highlight = _get_highlight(node_root.U_imag, tf.constant([action_best]), tf.constant(mask_change), M)
-                if flag_highlight.numpy():
-                    func_record_image('%s/vis_attention_%d' % (prefix, action_best), env_root.attention_render(highlight_mask=mask_highlight.numpy()), t)
+                if func_record_image is not None:
+                    env_clone = copy.deepcopy(node_root.env_clone)
+                    obs_next = np.expand_dims(env_clone.step(action_best)[0], 0)
+                    mask_change = mask_change_minigrid(node_root.obs, obs_next)
+                    mask_highlight, flag_highlight = _get_highlight(node_root.U_imag, tf.constant([action_best]), tf.constant(mask_change), M)
+                    if flag_highlight.numpy():
+                        func_record_image('%s/vis_attention_%d' % (prefix, action_best), env_root.attention_render(highlight_mask=mask_highlight.numpy()), t)
     return action_best

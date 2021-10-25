@@ -1,10 +1,14 @@
+"""
+COMPONENTS FOR EXPERIMENTS W/ MULTI-PROCESSING
+"""
+
 import time, gym, datetime, numpy as np
 from DQN_CP import get_DQN_CP_BASE_agent, get_DQN_CP_agent
 from DQN_NOSET import get_DQN_NOSET_BASE_agent, get_DQN_NOSET_agent
 from DQN_WM import get_DQN_WM_BASE_agent, get_DQN_WM_agent
 from DQN_Dyna import get_DQN_Dyna_BASE_agent, get_DQN_Dyna_agent
 from utils import *
-from runtime import get_cpprb_env_dict
+from runtime import FrameStack, get_cpprb_env_dict
 from multiprocessing import Process, Value, Event
 from multiprocessing.managers import SyncManager
 from cpprb import ReplayBuffer, MPReplayBuffer, MPPrioritizedReplayBuffer
@@ -14,7 +18,10 @@ from tensorboardX import SummaryWriter
 
 try:
     from gym.envs.registration import register as gym_register
-    gym_register(id="RandDistShift-v0", entry_point="AdvancedRandDistShift:AdvancedRandDistShift", reward_threshold=0.95)
+    gym_register(id="RandDistShift-v1", entry_point="RandDistShift:RandDistShift", reward_threshold=0.95)
+    gym_register(id="RandDistShift-v2", entry_point="RandDistShift2:RandDistShift2", reward_threshold=0.95)
+    gym_register(id="RandDistShift-v3", entry_point="RandDistShift3:RandDistShift3", reward_threshold=0.95)
+    gym_register(id="KeyRandDistShift-v3", entry_point="KeyRandDistShift:KeyRandDistShift", reward_threshold=0.95)
 except:
     pass
 
@@ -38,17 +45,29 @@ def get_default_rb_dict(size, env):
 def get_env_procgen(args):
     env = gym.make('procgen:procgen-%s-v0' % (args.game.lower(),), use_backgrounds=False, restrict_themes=True)
     if args.method in ['DQN_CP' or 'DQN_UP'] and args.step_plan_max: assert not env.spec.nondeterministic # does not support stochastic envs
+    if args.framestack: env = FrameStack(env, 4, gpu=args.gpu_buffer)
     return env
 
-def get_env_minigrid_train(args, width=8, height=8, lava_density_range=[0.3, 0.4], min_num_route=1, transposed=False): # diff 0.35
-    config = {'width': width, 'height': height, 'lava_density_range': lava_density_range, 'min_num_route': min_num_route, 'transposed': transposed}
-    env = gym.make('RandDistShift-v0', **config)
+def get_env_minigrid_train(args, lava_density_range=[0.3, 0.4], min_num_route=1, transposed=False):
+    config = {'width': args.size_world, 'height': args.size_world, 'lava_density_range': lava_density_range, 'min_num_route': min_num_route, 'transposed': transposed, 'random_color': args.color_distraction}
+    if 'key' in args.game.lower():
+        env = gym.make('KeyRandDistShift-%s' % args.version_game, **config)
+    else:
+        env = gym.make('RandDistShift-%s' % args.version_game, **config)
+    if args.framestack: env = FrameStack(env, args.framestack)
     return env
 
-def get_env_minigrid_test(args, width=8, height=8, lava_density_range=[0.3, 0.4], min_num_route=1, transposed=True): # diff 0.35
-    config = {'width': width, 'height': height, 'lava_density_range': lava_density_range, 'min_num_route': min_num_route, 'transposed': transposed}
-    env = gym.make('RandDistShift-v0', **config)
+def get_env_minigrid_test(args, lava_density_range=[0.3, 0.4], min_num_route=1, transposed=True):
+    config = {'width': args.size_world, 'height': args.size_world, 'lava_density_range': lava_density_range, 'min_num_route': min_num_route, 'transposed': transposed, 'random_color': args.color_distraction}
+    if 'key' in args.game.lower():
+        env = gym.make('KeyRandDistShift-%s' % args.version_game, **config)
+    else:
+        env = gym.make('RandDistShift-%s' % args.version_game, **config)
+    if args.framestack: env = FrameStack(env, args.framestack)
     return env
+
+def get_env_atari(args): 
+    raise NotImplementedError # TODO: to be implemented
 
 def get_agent(env, args, writer, global_rb=None):
     if global_rb is not None:
@@ -98,7 +117,10 @@ def prepare_experiment(env, args):
     # Shared memory objects to count number of samples and applied gradients
     steps_interact, episodes_interact = Value('i', 0), Value('i', 0) # dtype and initial values
     signal_explore = Value('b', False)
-    glboal_writer = manager.SummaryWriter("%s/%s/%s/%d" % (args.game, args.method, args.comments, args.seed))
+    if 'distshift' in args.game.lower():
+        glboal_writer = manager.SummaryWriter("%s-%s/%s/%s/%d" % (args.game, args.version_game, args.method, args.comments, args.seed))
+    else:
+        glboal_writer = manager.SummaryWriter("%s/%s/%s/%d" % (args.game, args.method, args.comments, args.seed))
     return global_rb, kwargs_local, queues, queue_envs_train, queue_envs_eval, event_terminate, steps_interact, episodes_interact, signal_explore, glboal_writer
 
 def import_tf():
@@ -128,11 +150,16 @@ def evaluate_agent_mp(func_env, agent, num_episodes=10, type_env='minigrid', suf
             return_episode += reward
             obs_curr = obs_next
             agent.steps_interact += 1
-            flag_reset = done
+            if type_env == 'procgen':
+                flag_reset = done and steps_episode != env.spec.max_episode_steps and reward == 0 and not info['prev_level_complete']
+            elif type_env == 'atari':
+                flag_reset = env.was_real_done
+            else:
+                flag_reset = done
         returns.append(np.copy(return_episode))
     return_eval_avg, return_eval_std = np.mean(returns), np.std(returns)
     print('EVALx%d @ step %d - return_eval_avg: %.2f, return_eval_std: %.2f' % (num_episodes, step_record, return_eval_avg, return_eval_std))
-    agent.record_scalar('Return/eval' + suffix, return_eval_avg, step_record)
+    agent.record_scalar('Performance/eval' + suffix, return_eval_avg, step_record)
 
 def generator_env(queue_envs_train, queue_envs_eval, func_env_train, func_env_eval, event_terminate, args):
     while not event_terminate.is_set():
@@ -158,19 +185,25 @@ def explorer(global_rb, kwargs_local, queue, queue_envs_train, steps_interact, e
     agent = get_agent(env, args, writer)
     agent.initialize(env.reset(), env.action_space.sample())
     size_submit = 32
-    if 'minigrid' in args.game.lower():
+    if 'procgen' in args.type_extractor.lower():
+        type_env = 'procgen'
+    elif 'minigrid' in args.game.lower() or 'distshift' in args.game.lower():
         type_env = 'minigrid'
+    elif 'atari' in args.game.lower():
+        type_env = 'atari'
     else:
         raise NotImplementedError
-    flag_newenvs = 'randdistshift' in args.game.lower()
+    flag_newenvs = 'distshift' in args.game.lower()
+    if args.env_pipeline:
+        print('[EXPLORER] env generation pipeline enabled')
+    else:
+        print('[EXPLORER] env generation pipeline disabled')
     while not event_terminate.is_set():
         return_cum, steps_episode = 0, 0 # return_cum, return_cum_clipped, steps_episode = 0, 0, 0
         obs_curr, done, real_done, flag_reset = env.reset(), False, False, False
         if local_rb.get_stored_size() > 0: local_rb.on_episode_end()
         while not flag_reset:
-            while not signal_explore.value and not event_terminate.is_set():
-                time.sleep(0.0001)
-            if not queue.empty() and agent.initialized:
+            if not queue.empty():
                 dict_shared = None
                 while not queue.empty():
                     del dict_shared
@@ -203,8 +236,10 @@ def explorer(global_rb, kwargs_local, queue, queue_envs_train, steps_interact, e
                 else:
                     global_rb.add(**samples_local)
                 with steps_interact.get_lock(): steps_interact.value += size_local_rb
+                agent.steps_interact = steps_interact.value
+                while not signal_explore.value and not event_terminate.is_set(): time.sleep(0.0001)
         if writer is not None:
-            writer.add_scalar('Return/train', return_cum, steps_interact_curr)
+            writer.add_scalar('Performance/train', return_cum, steps_interact_curr)
             writer.add_scalar('Other/episodes', episodes_interact_curr, steps_interact_curr)
         with episodes_interact.get_lock(): episodes_interact.value += 1
         if flag_newenvs:
@@ -214,27 +249,51 @@ def explorer(global_rb, kwargs_local, queue, queue_envs_train, steps_interact, e
             except:
                 env = func_env(args)
 
+def init_learner_agent(agent, global_rb, func_env, args):
+    while global_rb.get_stored_size() < args.size_batch:
+        env = func_env(args)
+        obs_curr, done = env.reset(), False
+        step_episode = 0
+        if global_rb.get_stored_size() > 0: global_rb.on_episode_end()
+        while not done and global_rb.get_stored_size() < args.size_batch:
+            action = env.action_space.sample()
+            obs_next, reward, done, info = env.step(action) # take a computed action
+            step_episode += 1
+            if 'procgen' in args.game.lower():
+                real_done = done and step_episode != env.spec.max_episode_steps and reward == 0 and not info['prev_level_complete']
+            elif 'minigrid' in args.game.lower() or 'distshift' in args.game.lower():
+                real_done = done and step_episode != env.unwrapped.max_steps
+            else:
+                real_done = done
+            global_rb.add(obs=obs_curr, act=action, rew=reward, done=real_done, next_obs=obs_next)
+    agent.initialize()
+    global_rb.clear()
+    return agent
+
 def learner(global_rb, queues, steps_interact, episodes_interact, event_terminate, signal_explore, args, pid_main, func_env, writer):
     tf = import_tf()
+    writer.add_scalar('Zzz/zzz', 0, 0)
     process_main = psutil.Process(pid_main)
     process_learner = psutil.Process(os.getpid())
     env = func_env(args)
     agent = get_agent(env, args, writer, global_rb=global_rb)
+    agent = init_learner_agent(agent, global_rb, func_env, args)
     step_last_sync, episode_last_eval, time_last_disp = 0, 0, time.time()
     print('[LEARNER] loop enter')
     agent.steps_interact = steps_interact.value
-    freq_sync = 64
+    freq_sync = 32
     flag_updated_since_sync = False
     batch_preload = None
     steps_processed_last_disp, episode_last_disp, time_last_disp = 0, 0, time.time()
     while not event_terminate.is_set():
-        episodes_interact_curr = episodes_interact.value
-        flag_eval = agent.initialized and (episodes_interact_curr - episode_last_eval) >= args.freq_eval
-        agent.steps_interact = steps_interact.value
-        flag_sync = agent.initialized and (agent.steps_interact - step_last_sync) >= freq_sync and agent.steps_interact >= agent.time_learning_starts
         flag_need_update = agent.need_update()
         if flag_need_update:
             with signal_explore.get_lock(): signal_explore.value = False
+        episodes_interact_curr = episodes_interact.value
+        flag_eval = (episodes_interact_curr - episode_last_eval) >= args.freq_eval
+        agent.steps_interact = steps_interact.value
+        flag_sync = (agent.steps_interact - step_last_sync) >= freq_sync and agent.steps_interact >= agent.time_learning_starts
+        if flag_need_update:
             agent.step_update(batch=batch_preload)
             batch_preload = None
             flag_updated_since_sync = True
@@ -269,8 +328,11 @@ def learner(global_rb, queues, steps_interact, episodes_interact, event_terminat
                 if np.random.rand() < 0.01: writer.add_scalar('Other/RAM', mem, agent.steps_processed)
                 steps_processed_last_disp, episode_last_disp, time_last_disp = agent.steps_processed, episodes_interact_curr, time.time()
             dict_shared = None
-        elif batch_preload is None and agent.initialized and global_rb.get_stored_size() >= agent.size_batch:
-            batch_preload = agent.sample_batch()
+        else:
+            with signal_explore.get_lock(): signal_explore.value = True
+            writer.flush()
+            if batch_preload is None and global_rb.get_stored_size() >= agent.size_batch:
+                batch_preload = agent.sample_batch()
         if (flag_sync and not flag_need_update and flag_updated_since_sync) or flag_eval:
             if args.method != 'DQN_Dyna' and agent.ignore_model:
                 dict_shared = {'network_policy_src': agent.network_policy.get_weights(), 'embed_pos_src': tf.keras.backend.get_value(agent.embed_pos), 'model_src': None, 'steps_processed': agent.steps_processed}
@@ -294,9 +356,6 @@ def learner(global_rb, queues, steps_interact, episodes_interact, event_terminat
             episode_last_eval += args.freq_eval
         if agent.steps_processed >= min(args.steps_stop, args.steps_max) or episodes_interact_curr >= args.episodes_max:
             event_terminate.set()
-        if not flag_need_update:
-            with signal_explore.get_lock(): signal_explore.value = True
-            writer.flush()
 
 def evaluator(steps_interact, event_terminate, queue, queue_envs_eval, args, func_env, writer):
     if args.gpu_evaluator:
@@ -309,11 +368,20 @@ def evaluator(steps_interact, event_terminate, queue, queue_envs_eval, args, fun
     agent.initialize(env.reset(), env.action_space.sample())
     if 'minigrid' in args.type_extractor.lower():
         type_env = 'minigrid'
+    elif 'atari' in args.type_extractor.lower():
+        type_env = 'atari'
+    elif 'procgen' in args.type_extractor.lower():
+        type_env = 'procgen'
     else:
-        raise NotImplementedError
+        type_env = 'default'
     print('[EVALUATOR] loop enter')
-    flag_newenvs = 'randdistshift' in args.game.lower()
-    if not flag_newenvs: queue_envs_eval = None
+    flag_newenvs = 'distshift' in args.game.lower()
+    if args.env_pipeline:
+        print('[EVALUATOR] env generation pipeline enabled')
+    else:
+        print('[EVALUATOR] env generation pipeline disabled')
+    if not flag_newenvs or not args.env_pipeline:
+        queue_envs_eval = None
     while not event_terminate.is_set():
         if queue.empty():
             time.sleep(0.0001)
@@ -330,26 +398,29 @@ def evaluator(steps_interact, event_terminate, queue, queue_envs_eval, args, fun
             evaluate_agent_mp(lambda : func_env(args), agent, num_episodes=20, type_env=type_env, step_record=None, queue_envs=queue_envs_eval, heuristic='random')
             if type_env == 'minigrid':
                 agent.steps_interact, agent.step_last_record_ts = steps_interact, steps_interact
-                evaluate_agent_mp(lambda : func_env(args, lava_density_range=[0.2, 0.3]), agent, num_episodes=10, type_env=type_env, step_record=None, heuristic='random', suffix='diff_0.25', record_ts=False) # diff 0.25
+                evaluate_agent_mp(lambda : func_env(args, lava_density_range=[0.2, 0.3]), agent, num_episodes=10, type_env=type_env, step_record=None, heuristic='random', suffix='diff_0.25', record_ts=False)
                 agent.steps_interact, agent.step_last_record_ts = steps_interact, steps_interact
-                evaluate_agent_mp(lambda : func_env(args, lava_density_range=[0.4, 0.5]), agent, num_episodes=10, type_env=type_env, step_record=None, heuristic='random', suffix='diff_0.45', record_ts=False) # diff 0.45
+                evaluate_agent_mp(lambda : func_env(args, lava_density_range=[0.4, 0.5]), agent, num_episodes=10, type_env=type_env, step_record=None, heuristic='random', suffix='diff_0.45', record_ts=False)
                 agent.steps_interact, agent.step_last_record_ts = steps_interact, steps_interact
-                evaluate_agent_mp(lambda : func_env(args, lava_density_range=[0.5, 0.6]), agent, num_episodes=10, type_env=type_env, step_record=None, heuristic='random', suffix='diff_0.55', record_ts=False) # diff 0.55
-            if not args.ignore_model and args.step_plan_max:
+                evaluate_agent_mp(lambda : func_env(args, lava_density_range=[0.5, 0.6]), agent, num_episodes=10, type_env=type_env, step_record=None, heuristic='random', suffix='diff_0.55', record_ts=False)
+            if not args.ignore_model and args.step_plan_max and not args.performance_only:
                 agent.steps_interact, agent.step_last_record_ts = steps_interact, steps_interact
-                evaluate_agent_mp(lambda : func_env(args), agent, num_episodes=20, suffix='_best', type_env=type_env, step_record=None, queue_envs=queue_envs_eval, heuristic='best_first') # diff 0.35
+                evaluate_agent_mp(lambda : func_env(args), agent, num_episodes=20, suffix='_best', type_env=type_env, step_record=None, queue_envs=queue_envs_eval, heuristic='best_first')
                 agent.steps_interact, agent.step_last_record_ts = steps_interact, steps_interact
-                evaluate_agent_mp(lambda : func_env(args), agent, num_episodes=20, suffix='_modelfree', disable_planning=True, type_env=type_env, step_record=None, queue_envs=queue_envs_eval) # diff 0.35
+                evaluate_agent_mp(lambda : func_env(args), agent, num_episodes=20, suffix='_modelfree', disable_planning=True, type_env=type_env, step_record=None, queue_envs=queue_envs_eval)
 
 def run_multiprocess(args, func_env_train, func_env_eval):
     pid_main = os.getpid()
     env = func_env_train(args)
     global_rb, kwargs_local_rb, queues, queue_envs_train, queue_envs_eval, event_terminate, steps_interact, episodes_interact, signal_explore, writer = prepare_experiment(env, args)
     tasks = []
-    tasks.append(Process(target=generator_env, args=[queue_envs_train, queue_envs_eval, func_env_train, func_env_eval, event_terminate, args]))
+    if args.env_pipeline:
+        tasks.append(Process(target=generator_env, args=[queue_envs_train, queue_envs_eval, func_env_train, func_env_eval, event_terminate, args]))
     tasks.append(Process(target=explorer, args=[global_rb, kwargs_local_rb, queues[0], queue_envs_train, steps_interact, episodes_interact, event_terminate, signal_explore, args, func_env_train, writer]))
+    args_otherexplorers = copy.deepcopy(args)
+    args_otherexplorers.performance_only = 1
     for i in range(1, args.num_explorers):
-        tasks.append(Process(target=explorer, args=[global_rb, kwargs_local_rb, queues[i], queue_envs_train, steps_interact, episodes_interact, event_terminate, signal_explore, args, func_env_train, None])) 
+        tasks.append(Process(target=explorer, args=[global_rb, kwargs_local_rb, queues[i], queue_envs_train, steps_interact, episodes_interact, event_terminate, signal_explore, args_otherexplorers, func_env_train, None])) 
     tasks.append(Process(target=learner, args=[global_rb, queues, steps_interact, episodes_interact, event_terminate, signal_explore, args, pid_main, func_env_train, writer]))
     tasks.append(Process(target=evaluator, args=[steps_interact, event_terminate, queues[-1], queue_envs_eval, args, func_env_eval, writer]))
     for task in tasks: task.start()

@@ -1,6 +1,10 @@
+"""
+DEFINITIONS OF DYNA AND DYNA* AGENT
+"""
+
 import tensorflow as tf, numpy as np
 from runtime import obs2tensor, get_cpprb
-from utils import to_categorical, from_categorical, embed_pos_hd, huber_from_L1, mask_change_minigrid, add_timing_signal_nd, LinearSchedule, clip_gradients
+from utils import to_categorical, from_categorical, embed_pos_hd, mask_change_minigrid, LinearSchedule, clip_gradients
 from components import RL_AGENT, EXTRACTOR_FEATURE
 from components_CP import OBJECT_EXTRACTOR, ESTIMATOR_VALUE, MODEL_TRANSITION_MINIGRIDOBS
 
@@ -17,23 +21,20 @@ class DQN_Dyna_NETWORK(tf.keras.Model):
 def get_DQN_Dyna_BASE_agent(env, args, writer=None):
     extractor_feature_policy = EXTRACTOR_FEATURE(shape_input=env.observation_space.shape, type_extractor=args.type_extractor, channels_out=args.len_feature, features_learnable=args.extractor_learnable)
     embed_pos, dim_additional = embed_pos_hd([extractor_feature_policy.convh, extractor_feature_policy.convw], len_embed_pos=args.len_embed_pos)
-    if args.type_pos_ebd == 'cat-learnable':
-        embed_pos = tf.Variable(embed_pos, trainable=True, dtype=tf.float32)
-    elif args.type_pos_ebd == 'cat-sin':
-        embed_pos = tf.reshape(add_timing_signal_nd(tf.zeros([1, extractor_feature_policy.convh, extractor_feature_policy.convw, dim_additional], dtype=tf.float32)), [1, -1, dim_additional])
+    embed_pos = tf.Variable(embed_pos, trainable=True, dtype=tf.float32)
     extractor_object_policy = OBJECT_EXTRACTOR(extractor_feature_policy, len_feature=args.len_feature, norm=args.layernorm)
-    head_value_policy = ESTIMATOR_VALUE(len_feature=args.len_feature, embed_pos=embed_pos, num_actions=env.action_space.n, value_min=args.value_min, value_max=args.value_max, norm=args.layernorm, atoms=args.atoms_value, n_head=args.n_head)
+    head_value_policy = ESTIMATOR_VALUE(len_feature=args.len_feature, embed_pos=embed_pos, num_actions=env.action_space.n, value_min=args.value_min, value_max=args.value_max, norm=args.layernorm, atoms=args.atoms_value, transform=args.transform_value, n_head=args.n_head)
     if args.disable_bottleneck: args.size_bottleneck = extractor_object_policy.m
     if args.learn_dyna_model:
-        model_dynamics = MODEL_TRANSITION_MINIGRIDOBS(len_feature=args.len_feature, embed_pos=embed_pos, n_action_space=env.action_space.n, len_action=args.len_ebd_action, n_head=args.n_head, layers_model=args.layers_model, m=extractor_object_policy.m, n=args.size_bottleneck, reward_min=args.reward_min, reward_max=args.reward_max, atoms_reward=args.atoms_reward, norm=args.layernorm, FC_depth=args.FC_depth, FC_width=args.FC_width, type_compress=args.type_compress)
+        model_dynamics = MODEL_TRANSITION_MINIGRIDOBS(len_feature=args.len_feature, embed_pos=embed_pos, n_action_space=env.action_space.n, len_action=args.len_ebd_action, n_head=args.n_head, layers_model=args.layers_model, m=extractor_object_policy.m, n=args.size_bottleneck, reward_min=args.reward_min, reward_max=args.reward_max, atoms_reward=args.atoms_reward, norm=args.layernorm, transform_reward=args.transform_reward, QKV_depth=args.QKV_depth, QKV_width=args.QKV_width, FC_depth=args.FC_depth, FC_width=args.FC_width, type_attention=args.type_attention)
     else:
         model_dynamics = None
-    return DQN_Dyna_BASE(env, extractor_object_policy, head_value_policy, model_dynamics, step_plan_max=args.step_plan_max, gamma=args.gamma, steps_total=args.steps_max, embed_pos=embed_pos, writer=writer, value_min=args.value_min, value_max=args.value_max, reward_min=args.reward_min, reward_max=args.reward_max)
+    return DQN_Dyna_BASE(env, extractor_object_policy, head_value_policy, model_dynamics, step_plan_max=args.step_plan_max, gamma=args.gamma, steps_total=args.steps_max, embed_pos=embed_pos, writer=writer, value_min=args.value_min, value_max=args.value_max, transform_value=args.transform_value, reward_min=args.reward_min, reward_max=args.reward_max, transform_reward=args.transform_reward, disable_debug=args.performance_only)
 
 class DQN_Dyna_BASE(RL_AGENT):
     def __init__(self,
         env, extractor_object_policy, head_value_policy, model,
-        step_plan_max=5, gamma=0.99, exploration_fraction=0.02, exploration_final_eps=0.01, epsilon_eval=0.001, steps_total=50000000, freq_record=512, clip_reward=False, embed_pos=None, writer=None, value_min=None, value_max=None, reward_min=None, reward_max=None):
+        step_plan_max=5, gamma=0.99, exploration_fraction=0.02, exploration_final_eps=0.01, epsilon_eval=0.001, steps_total=50000000, freq_record=512, clip_reward=False, embed_pos=None, writer=None, value_min=None, value_max=None, transform_value=False, reward_min=None, reward_max=None, transform_reward=False, disable_debug=False):
 
         super(DQN_Dyna_BASE, self).__init__(env, gamma, writer)
         self.embed_pos = embed_pos
@@ -51,12 +52,13 @@ class DQN_Dyna_BASE(RL_AGENT):
         self.model = model
         
         self.clip_reward = bool(clip_reward)
-        self.freq_record = freq_record
+        self.freq_record = freq_record if not disable_debug else int(1e7)
         self.steps_interact, self.steps_total = 0, steps_total
         self.obs2tensor = lambda x: obs2tensor(x, self.extractor_policy.divisor_feature, self.extractor_policy.dtype_converted_obs)
         self.step_last_record_ts = 0
 
         self.value_min, self.value_max, self.reward_min, self.reward_max = value_min, value_max, reward_min, reward_max
+        self.transform_value, self.transform_reward = transform_value, transform_reward
 
     def step(self, obs_curr, action, reward, obs_next, done, update=False):
         if not self.initialized: self.initialize(obs_curr, action)
@@ -70,7 +72,7 @@ class DQN_Dyna_BASE(RL_AGENT):
 
     @tf.function
     def _decide_model_free(self, obs):
-        return tf.math.argmax(from_categorical(self.network_policy(obs, eval=True), value_min=self.value_min, value_max=self.value_max, atoms=self.head_value_policy.atoms), axis=-1, output_type=tf.int32)
+        return tf.math.argmax(from_categorical(self.network_policy(obs, eval=True), value_min=self.value_min, value_max=self.value_max, atoms=self.head_value_policy.atoms, transform=False), axis=-1, output_type=tf.int32) # no need to transform back, only needs the argmax
 
     @tf.function
     def _process_samples(self, batch_reward, batch_done):
@@ -85,7 +87,7 @@ class DQN_Dyna_BASE(RL_AGENT):
     @tf.function
     def _construct_targets_no_dist(self, batch_reward, batch_not_done, batch_obs_next):
         batch_features_next = self.extractor_policy(batch_obs_next)
-        Q_next = from_categorical(self.head_value_policy(batch_features_next, eval=True), value_min=self.value_min, value_max=self.value_max, atoms=self.head_value_policy.atoms)
+        Q_next = from_categorical(self.head_value_policy(batch_features_next, eval=True), value_min=self.value_min, value_max=self.value_max, atoms=self.head_value_policy.atoms, transform=self.transform_value)
         V_next = tf.reduce_max(Q_next, axis=-1)
         target_update = tf.clip_by_value(batch_reward + self.gamma * tf.cast(batch_not_done, tf.float32) * V_next, clip_value_min=self.value_min, clip_value_max=self.value_max)
         return target_update
@@ -99,7 +101,7 @@ class DQN_Dyna_BASE(RL_AGENT):
         Q_logits_curr = self.head_value_policy(batch_features_curr, softmax=False, eval=True)
         indices = tf.stack([tf.range(batch_action.shape[0], dtype=tf.int32), batch_action], 1)
         V_dist_curr = tf.nn.softmax(tf.gather_nd(Q_logits_curr, indices), axis=-1)
-        error_TD_L1 = tf.math.abs(target_update - from_categorical(V_dist_curr, value_min=self.value_min, value_max=self.value_max, atoms=self.head_value_policy.atoms))
+        error_TD_L1 = tf.math.abs(target_update - from_categorical(V_dist_curr, value_min=self.value_min, value_max=self.value_max, atoms=self.head_value_policy.atoms, transform=self.transform_value))
         return error_TD_L1
 
     def calculate_priorities(self, batch):
@@ -133,23 +135,20 @@ def get_DQN_Dyna_agent(env, args, replay_buffer=None, replay_buffer_imagined=Non
     if replay_buffer_imagined is None: replay_buffer_imagined = get_cpprb(env, args.size_buffer, prioritized=args.prioritized_replay)
     extractor_feature_policy = EXTRACTOR_FEATURE(shape_input=env.observation_space.shape, type_extractor=args.type_extractor, channels_out=args.len_feature, features_learnable=args.extractor_learnable)
     embed_pos, dim_additional = embed_pos_hd([extractor_feature_policy.convh, extractor_feature_policy.convw], len_embed_pos=args.len_embed_pos)
-    if args.type_pos_ebd == 'cat-learnable':
-        embed_pos = tf.Variable(embed_pos, trainable=True, dtype=tf.float32)
-    elif args.type_pos_ebd == 'cat-sin':
-        embed_pos = tf.reshape(add_timing_signal_nd(tf.zeros([1, extractor_feature_policy.convh, extractor_feature_policy.convw, dim_additional], dtype=tf.float32)), [1, -1, dim_additional])
+    embed_pos = tf.Variable(embed_pos, trainable=True, dtype=tf.float32)
     extractor_object_policy = OBJECT_EXTRACTOR(extractor_feature_policy, len_feature=args.len_feature, norm=args.layernorm)
-    head_value_policy = ESTIMATOR_VALUE(len_feature=args.len_feature, embed_pos=embed_pos, num_actions=env.action_space.n, value_min=args.value_min, value_max=args.value_max, norm=args.layernorm, atoms=args.atoms_value, n_head=args.n_head)
+    head_value_policy = ESTIMATOR_VALUE(len_feature=args.len_feature, embed_pos=embed_pos, num_actions=env.action_space.n, value_min=args.value_min, value_max=args.value_max, norm=args.layernorm, atoms=args.atoms_value, transform=args.transform_value, n_head=args.n_head)
     extractor_feature_target = EXTRACTOR_FEATURE(shape_input=env.observation_space.shape, type_extractor=args.type_extractor, channels_out=args.len_feature)
     extractor_object_target = OBJECT_EXTRACTOR(extractor_feature_target, len_feature=args.len_feature, norm=args.layernorm)
     extractor_object_target.trainable = False
-    head_value_target = ESTIMATOR_VALUE(len_feature=args.len_feature, embed_pos=embed_pos, num_actions=env.action_space.n, value_min=args.value_min, value_max=args.value_max, norm=args.layernorm, atoms=args.atoms_value, n_head=args.n_head)
+    head_value_target = ESTIMATOR_VALUE(len_feature=args.len_feature, embed_pos=embed_pos, num_actions=env.action_space.n, value_min=args.value_min, value_max=args.value_max, norm=args.layernorm, atoms=args.atoms_value, transform=args.transform_value, n_head=args.n_head)
     head_value_target.trainable = False
     if args.disable_bottleneck: args.size_bottleneck = extractor_object_policy.m
     if args.learn_dyna_model:
-        model_dynamics = MODEL_TRANSITION_MINIGRIDOBS(len_feature=args.len_feature, embed_pos=embed_pos, n_action_space=env.action_space.n, len_action=args.len_ebd_action, n_head=args.n_head, layers_model=args.layers_model, m=extractor_object_policy.m, n=args.size_bottleneck, reward_min=args.reward_min, reward_max=args.reward_max, atoms_reward=args.atoms_reward, norm=args.layernorm, FC_depth=args.FC_depth, FC_width=args.FC_width, type_compress=args.type_compress)
+        model_dynamics = MODEL_TRANSITION_MINIGRIDOBS(len_feature=args.len_feature, embed_pos=embed_pos, n_action_space=env.action_space.n, len_action=args.len_ebd_action, n_head=args.n_head, layers_model=args.layers_model, m=extractor_object_policy.m, n=args.size_bottleneck, reward_min=args.reward_min, reward_max=args.reward_max, atoms_reward=args.atoms_reward, norm=args.layernorm, transform_reward=args.transform_reward, QKV_depth=args.QKV_depth, QKV_width=args.QKV_width, FC_depth=args.FC_depth, FC_width=args.FC_width, type_attention=args.type_attention)
     else:
         model_dynamics = None
-    return DQN_Dyna(env, extractor_object_policy, extractor_object_target, head_value_policy, head_value_target, model_dynamics, replay_buffer, replay_buffer_imagined, size_bottleneck=args.size_bottleneck, size_batch=args.size_batch, clip_reward=args.clip_reward, steps_total=args.steps_max, prioritized_replay=args.prioritized_replay, ignore_TD=args.ignore_TD, type_optimizer=args.type_optimizer, step_plan_max=args.step_plan_max, gamma=args.gamma, lr=args.lr, freq_train_TD=args.freq_train_TD, freq_train_model=args.freq_train_model, embed_pos=embed_pos, writer=writer, value_min=args.value_min, value_max=args.value_max, reward_min=args.reward_min, reward_max=args.reward_max)
+    return DQN_Dyna(env, extractor_object_policy, extractor_object_target, head_value_policy, head_value_target, model_dynamics, replay_buffer, replay_buffer_imagined, size_bottleneck=args.size_bottleneck, size_batch=args.size_batch, clip_reward=args.clip_reward, steps_total=args.steps_max, prioritized_replay=args.prioritized_replay, ignore_TD=args.ignore_TD, type_optimizer=args.type_optimizer, step_plan_max=args.step_plan_max, gpu_buffer=args.gpu_buffer, gamma=args.gamma, lr=args.lr, freq_train_TD=args.freq_train_TD, freq_train_model=args.freq_train_model, embed_pos=embed_pos, writer=writer, value_min=args.value_min, value_max=args.value_max, transform_value=args.transform_value, reward_min=args.reward_min, reward_max=args.reward_max, transform_reward=args.transform_reward, disable_debug=args.performance_only)
 
 class DQN_Dyna(DQN_Dyna_BASE):
     def __init__(self,
@@ -167,15 +166,16 @@ class DQN_Dyna(DQN_Dyna_BASE):
         freq_targetnet_update=8000, freq_train_TD=4, freq_train_model=4, size_batch=32,
         type_optimizer='Adam',
         clip_gradient_TD=True, clip_gradient_model=True,
-        clip_reward=False, ignore_TD=False, embed_pos=None, writer=None,
-        value_min=None, value_max=None, reward_min=None, reward_max=None):
+        clip_reward=False, ignore_TD=False, gpu_buffer=False, embed_pos=None, writer=None,
+        value_min=None, value_max=None, transform_value=False, reward_min=None, reward_max=None, transform_reward=False, disable_debug=False):
 
         super(DQN_Dyna, self).__init__(env, extractor_object_policy, head_value_policy, model,
-        step_plan_max=step_plan_max, gamma=gamma, exploration_fraction=exploration_fraction, exploration_final_eps=exploration_final_eps, epsilon_eval=epsilon_eval, steps_total=steps_total, embed_pos=embed_pos, clip_reward=clip_reward, writer=writer, value_min=value_min, value_max=value_max, reward_min=reward_min, reward_max=reward_max)
+        step_plan_max=step_plan_max, gamma=gamma, exploration_fraction=exploration_fraction, exploration_final_eps=exploration_final_eps, epsilon_eval=epsilon_eval, steps_total=steps_total, embed_pos=embed_pos, clip_reward=clip_reward, writer=writer, value_min=value_min, value_max=value_max, transform_value=transform_value, reward_min=reward_min, reward_max=reward_max, transform_reward=transform_reward, disable_debug=disable_debug)
 
         self.replay_buffer, self.replay_buffer_imagined = replay_buffer, replay_buffer_imagined
         self.clip_gradient_TD, self.clip_gradient_model = bool(clip_gradient_TD), bool(clip_gradient_model)
         self.ignore_TD = bool(ignore_TD)
+        self.gpu_buffer = bool(gpu_buffer)
 
         ## target network
         self.extractor_target = extractor_object_target
@@ -326,22 +326,22 @@ class DQN_Dyna(DQN_Dyna_BASE):
     def _construct_targets_DDQN(self, batch_reward, batch_not_done, batch_obs_next):
         size_batch = tf.size(batch_reward)
         batch_features_next_target = self.extractor_target(batch_obs_next)
-        Q_next_target = from_categorical(self.head_value_target(batch_features_next_target, eval=True), value_min=self.value_min, value_max=self.value_max, atoms=self.head_value_policy.atoms)
+        Q_next_target = from_categorical(self.head_value_target(batch_features_next_target, eval=True), value_min=self.value_min, value_max=self.value_max, atoms=self.head_value_policy.atoms, transform=self.transform_value)
         batch_features_next_policy = self.extractor_policy(batch_obs_next)
         Q_dist_next_policy = self.head_value_policy(batch_features_next_policy, eval=True)
-        batch_action_next_policy = tf.math.argmax(from_categorical(Q_dist_next_policy, value_min=self.value_min, value_max=self.value_max, atoms=self.head_value_policy.atoms), axis=-1, output_type=tf.int32)
+        batch_action_next_policy = tf.math.argmax(from_categorical(Q_dist_next_policy, value_min=self.value_min, value_max=self.value_max, atoms=self.head_value_policy.atoms, transform=False), axis=-1, output_type=tf.int32) # no need to transform back, only needs the argmax
         V_next_target = tf.gather_nd(Q_next_target, tf.stack([tf.range(size_batch, dtype=tf.int32), batch_action_next_policy], 1))
         target_update = tf.clip_by_value(batch_reward + self.gamma * tf.cast(batch_not_done, tf.float32) * V_next_target, clip_value_min=self.value_min, clip_value_max=self.value_max)
-        target_dist_update = to_categorical(target_update, value_min=self.value_min, value_max=self.value_max, atoms=self.head_value_policy.atoms, clip=False)
+        target_dist_update = to_categorical(target_update, value_min=self.value_min, value_max=self.value_max, atoms=self.head_value_policy.atoms, transform=self.transform_value, clip=False)
         return target_dist_update, target_update, batch_features_next_policy, Q_dist_next_policy
 
     @tf.function
     def _construct_targets_DQN(self, batch_reward, batch_not_done, batch_obs_next):
         batch_features_next_target = self.extractor_target(batch_obs_next)
-        Q_next_target = from_categorical(self.head_value_target(batch_features_next_target, eval=True), value_min=self.value_min, value_max=self.value_max, atoms=self.head_value_policy.atoms)
+        Q_next_target = from_categorical(self.head_value_target(batch_features_next_target, eval=True), value_min=self.value_min, value_max=self.value_max, atoms=self.head_value_policy.atoms, transform=self.transform_value)
         V_next_target = tf.reduce_max(Q_next_target, axis=-1)
         target_update = tf.clip_by_value(batch_reward + self.gamma * tf.cast(batch_not_done, tf.float32) * V_next_target, clip_value_min=self.value_min, clip_value_max=self.value_max)
-        target_dist_update = to_categorical(target_update, value_min=self.value_min, value_max=self.value_max, atoms=self.head_value_policy.atoms, clip=False)
+        target_dist_update = to_categorical(target_update, value_min=self.value_min, value_max=self.value_max, atoms=self.head_value_policy.atoms, transform=self.transform_value, clip=False)
         return target_dist_update, target_update
 
     @tf.function
@@ -357,7 +357,7 @@ class DQN_Dyna(DQN_Dyna_BASE):
             error_TD_weighted = self.weight_error(error_TD, weights)
         gradients_TD = tape.gradient(error_TD_weighted, self.parameters_train_TD)
         if self.prioritized_replay or flag_record:
-            error_TD_L1 = tf.math.abs(target_update - from_categorical(V_dist_curr, value_min=self.value_min, value_max=self.value_max, atoms=self.head_value_policy.atoms))
+            error_TD_L1 = tf.math.abs(target_update - from_categorical(V_dist_curr, value_min=self.value_min, value_max=self.value_max, atoms=self.head_value_policy.atoms, transform=self.transform_value))
         else:
             error_TD_L1 = None
         if flag_record:
@@ -394,7 +394,7 @@ class DQN_Dyna(DQN_Dyna_BASE):
     @tf.function
     def _update_model(self, batch_obs_curr, batch_action, batch_obs_next, batch_done, batch_not_done, batch_reward, batch_features_next, Q_dist_next, weights, flag_record=False):
         index_term_trans, index_nonterm_trans = tf.squeeze(tf.where(batch_done)), tf.squeeze(tf.where(batch_not_done))
-        batch_reward_categorical = to_categorical(batch_reward, value_min=self.reward_min, value_max=self.reward_max, atoms=self.model.predictor_reward_term.atoms, clip=False)
+        batch_reward_categorical = to_categorical(batch_reward, value_min=self.reward_min, value_max=self.reward_max, atoms=self.model.predictor_reward_term.atoms, transform=self.transform_reward, clip=False)
         if batch_features_next is None: batch_features_next = self.extractor_policy(batch_obs_next) # if from the same batch and DDQN, this thing is already computed
         if Q_dist_next is None: Q_dist_next = self.head_value_policy(batch_features_next, eval=True) # if from the same batch and DDQN, this thing is already computed
         with tf.GradientTape(watch_accessed_variables=False) as tape:
@@ -413,7 +413,7 @@ class DQN_Dyna(DQN_Dyna_BASE):
             else:
                 error_dynamics_L1_objectwise_relative = tf.reduce_mean(error_dynamics_L1, axis=-1) / norm_features_L1_elementwise
                 error_dynamics_L1_changed_relative, error_dynamics_L1_unchanged_relative = None, None
-            batch_reward_imagined = from_categorical(batch_reward_dist_imagined, value_min=self.reward_min, value_max=self.reward_max, atoms=self.model.predictor_reward_term.atoms)
+            batch_reward_imagined = from_categorical(batch_reward_dist_imagined, value_min=self.reward_min, value_max=self.reward_max, atoms=self.model.predictor_reward_term.atoms, transform=self.transform_reward)
             error_reward_imagined_L1_weighted = tf.reduce_mean(tf.math.abs(batch_reward - batch_reward_imagined))
             batch_done_imagined_compact = tf.dtypes.cast(tf.argmax(batch_done_logits_imagined, axis=-1, output_type=tf.int32), tf.bool)
             eq_done = tf.dtypes.cast(batch_done == batch_done_imagined_compact, tf.float32)

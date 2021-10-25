@@ -1,3 +1,7 @@
+"""
+COMPONENTS FOR DYNA BASELINE EXPERIMENTS W/ MULTI-PROCESSING
+"""
+
 import time, datetime, numpy as np
 from DQN_Dyna import get_DQN_Dyna_BASE_agent, get_DQN_Dyna_agent
 from utils import *
@@ -14,7 +18,7 @@ from utils import from_categorical, obs2tensor
 
 try:
     from gym.envs.registration import register as gym_register
-    gym_register(id="RandDistShift-v0", entry_point="AdvancedRandDistShift:AdvancedRandDistShift", reward_threshold=0.95)
+    gym_register(id="RandDistShift-v0", entry_point="RandDistShift:RandDistShift", reward_threshold=0.95)
 except:
     pass
 
@@ -33,11 +37,15 @@ def explorer_dyna(global_rb_imagined, kwargs_local, queue, queue_envs_train, ste
     agent = get_DQN_Dyna_BASE_agent(env, args, writer=writer)
     agent.initialize(env.reset(), env.action_space.sample())
     size_submit = 32
-    if 'minigrid' in args.game.lower():
+    if 'procgen' in args.type_extractor.lower():
+        type_env = 'procgen'
+    elif 'minigrid' in args.game.lower() or 'distshift' in args.game.lower():
         type_env = 'minigrid'
+    elif 'atari' in args.game.lower():
+        type_env = 'atari'
     else:
         raise NotImplementedError
-    flag_newenvs = 'randdistshift' in args.game.lower()
+    flag_newenvs = args.env_pipeline and 'randdistshift' in args.game.lower()
     while not event_terminate.is_set():
         return_cum, steps_episode = 0, 0 # return_cum, return_cum_clipped, steps_episode = 0, 0, 0
         obs_curr, done, real_done, flag_reset = env.reset(), False, False, False
@@ -80,14 +88,14 @@ def explorer_dyna(global_rb_imagined, kwargs_local, queue, queue_envs_train, ste
                     obses_curr = tf.cast(obs2tensor(obses_curr), tf.float32)
                     obses_imagined, reward_dist_imagined, term_logits_imagined = agent.model(obses_curr, tf.squeeze(tf.constant(actions)), eval=True)
                     term_imagined = tf.math.argmax(term_logits_imagined, axis=-1, output_type=tf.int32)
-                    reward_imagined = from_categorical(reward_dist_imagined, value_min=agent.model.predictor_reward_term.value_min, value_max=agent.model.predictor_reward_term.value_max, atoms=agent.model.predictor_reward_term.atoms)
+                    reward_imagined = from_categorical(reward_dist_imagined, value_min=agent.model.predictor_reward_term.value_min, value_max=agent.model.predictor_reward_term.value_max, atoms=agent.model.predictor_reward_term.atoms, transform=agent.model.predictor_reward_term.transform)
                     samples_local['rew'], samples_local['done'], samples_local['next_obs'] = reward_imagined.numpy().reshape(-1, 1), term_imagined.numpy().reshape(-1, 1), tf.cast(tf.math.round(tf.clip_by_value(obses_imagined, clip_value_min=0, clip_value_max=96)), tf.uint8).numpy()
                 if args.prioritized_replay:
                     global_rb_imagined.add(**samples_local, priorities=agent.calculate_priorities(samples_local))
                 else:
                     global_rb_imagined.add(**samples_local)
         if writer is not None:
-            writer.add_scalar('Return/train', return_cum, steps_interact_curr)
+            writer.add_scalar('Performance/train', return_cum, steps_interact_curr)
             writer.add_scalar('Other/episodes', episodes_interact_curr, steps_interact_curr)
         with episodes_interact.get_lock(): episodes_interact.value += 1
         if flag_newenvs:
