@@ -2,7 +2,7 @@
 RUNTIME RELATED STUFFS
 """
 import tensorflow as tf
-import gym, imageio, numpy as np, random, sys, os
+import gym, numpy as np, random, sys, os
 from collections import deque
 from gym import spaces
 from gym.envs.registration import register as gym_register
@@ -250,19 +250,12 @@ return_highest = None
 def evaluate_agent(env, agent, seed, num_episodes=10, name_method="default", type_env='minigrid', render=False, milestone=False, suffix='', disable_planning=False, step_record=None): #TODO: changed to TF2 but not checked!
     if step_record is None: step_record = agent.steps_interact
     global return_highest
-    list_envs_renderable = ['atari']
     return_episode, returns = 0, []
-    if render and type_env in list_envs_renderable:
-        filename, video = '%s_%s_%d.mp4' % (env.spec._env_name, name_method, seed), []
     episode = 0
+    render = False
     while episode < num_episodes:
         obs_curr, done = env.reset(), False
         while not done:
-            if render and type_env in list_envs_renderable:
-                try:
-                    video.append(env.render(mode='rgb_array'))
-                except:
-                    render = False
             action = agent.decide(obs_curr, eval=True, disable_planning=disable_planning, env=env if type_env == 'minigrid' else None, suffix_record=suffix)
             obs_next, reward, done, _ = env.step(action) # take a computed action
             return_episode += reward
@@ -281,7 +274,6 @@ def evaluate_agent(env, agent, seed, num_episodes=10, name_method="default", typ
     tf.summary.text('Text/info_eval' + suffix, str_info_eval, step=step_record)
     if return_highest is None or return_highest < return_eval_avg:
         return_highest = return_eval_avg
-        if render and type_env in list_envs_renderable: imageio.mimwrite(filename, np.asarray(video), fps=30)
 
 def evaluate_agent_env_random(new_env_func, agent, seed, num_episodes=10, milestone=False, suffix='', disable_planning=False, step_record=None): #TODO: changed to TF2 but not checked!
     if step_record is None: step_record = agent.steps_interact

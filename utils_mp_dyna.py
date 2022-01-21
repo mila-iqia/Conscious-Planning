@@ -226,6 +226,8 @@ def prepare_experiment(env, args):
 
 def run_multiprocess(args, func_env_train, func_env_eval):
     # TODO: separate the normal explorers and the dyna explorers
+    if args.num_explorers % 2 != 0:
+        raise ValueError("args.num_explorers should be even, instead received %g" % (args.num_explorers,))
     pid_main = os.getpid()
     env = func_env_train(args)
     global_rb, global_rb_imagined, kwargs_local_rb, queues, queue_envs_train, queue_envs_eval, event_terminate, steps_interact, episodes_interact, signal_explore, writer = prepare_experiment(env, args)

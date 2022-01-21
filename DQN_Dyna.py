@@ -257,7 +257,10 @@ class DQN_Dyna(DQN_Dyna_BASE):
         else:
             weights_combined = None
         gradients_TD, error_TD_weighted, error_TD_L1_combined, error_TD_L1_weighted, _, _ = self._update_TD(batch_obs_curr_combined, batch_obs_next_combined, batch_action_combined, batch_reward_combined, batch_not_done_combined, weights_combined, flag_record=flag_record)
-        error_TD_L1, error_TD_L1_imagined = tf.split(error_TD_L1_combined, 2, axis=0)
+        if self.prioritized_replay:
+            error_TD_L1, error_TD_L1_imagined = tf.split(error_TD_L1_combined, 2, axis=0)
+        else:
+            error_TD_L1, error_TD_L1_imagined = None, None
         return gradients_TD, error_TD_weighted, error_TD_L1, error_TD_L1_imagined, error_TD_L1_weighted
 
     def update(self, flag_train_TD=True, flag_train_model=True, batch=None, batch_imagined=None):

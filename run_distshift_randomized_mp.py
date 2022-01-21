@@ -20,7 +20,7 @@ import utils_mp, utils_mp_dyna
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='')
     # arguments for experiment setting
-    parser.add_argument('--method', type=str, default='DQN_CP', help='type of agent')
+    parser.add_argument('--method', type=str, default='DQN_Dyna', help='type of agent')
     parser.add_argument('--game', type=str, default='RandDistShift', help='RandDistShift or KeyRandDistShift')
     parser.add_argument('--version_game', type=str, default='v1', help='v1 (for turn-OR-forward) or v3 (for turn-AND-forward)')
     parser.add_argument('--size_world', type=int, default=8, help='the length of each dimension for gridworlds')
@@ -29,7 +29,7 @@ if __name__ == '__main__':
     parser.add_argument('--ignore_TD', type=int, default=0, help='turn this on to disable value estimator learning')
     parser.add_argument('--ignore_model', type=int, default=0, help='turn this on for modelfree agents')
     parser.add_argument('--noise_inject', type=int, default=0, help='inject noise into transition model')
-    parser.add_argument('--prioritized_replay', type=int, default=1, help='prioritized replay buffer, good stuff!')
+    parser.add_argument('--prioritized_replay', type=int, default=0, help='prioritized replay buffer, good stuff!')
     parser.add_argument('--disable_bottleneck', type=int, default=0, help='1 to disable bottleneck, making CP agent UP')
     parser.add_argument('--layers_model', type=int, default=1, help='#action-augmented transformer layers for dynamics model')
     parser.add_argument('--len_feature', type=int, default=24, help='length of the feature part of the object embeddings')
@@ -74,11 +74,11 @@ if __name__ == '__main__':
     parser.add_argument('--comments', type=str, default='x', help='use x for default. If changed, the run will be marked with the string')
     # for multiworker
     parser.add_argument('--gpu_buffer', type=int, default=0, help='turn this on to put observations in replay onto GPU')
-    parser.add_argument('--num_explorers', type=int, default=1, help='')
+    parser.add_argument('--num_explorers', type=int, default=2, help='')
     parser.add_argument('--gpu_explorer', type=int, default=0, help='')
     parser.add_argument('--gpu_evaluator', type=int, default=0, help='')
     # Dyna specific
-    parser.add_argument('--learn_dyna_model', type=int, default=0, help='when used with DQN_Dyna, 1 for Dyna, 0 for Dyna*')
+    parser.add_argument('--learn_dyna_model', type=int, default=1, help='when used with DQN_Dyna, 1 for Dyna, 0 for Dyna*')
     # NOSET specific
     parser.add_argument('--len_hidden', type=int, default=256, help='only for NOSET, length of the vectorized representation')
     # WM specific
