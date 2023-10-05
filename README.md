@@ -1,9 +1,9 @@
-### [A Consciousness-Inspired Planning Agent for Model-Based Reinforcement Learning](http://mingde.world/the-new-umoma-opens-its-doors-2/a-step-towards-conscious-planning/)
+### [A Consciousness-Inspired Planning Agent for Model-Based Reinforcement Learning](https://pwnerharry.github.io/a-step-towards-conscious-planning/)
 _By Mingde "Harry" Zhao, Zhen Liu, Sitao Luan, Shuyuan Zhang, Doina Precup and Yoshua Bengio_
 
 ![](CP_Poster.png)
 
-#### ([BLOGPOST](http://mingde.world/the-new-umoma-opens-its-doors-2/a-step-towards-conscious-planning/))
+#### ([BLOGPOST](https://pwnerharry.github.io/a-step-towards-conscious-planning/))
 
 #### **Install Dependencies**
 ```
